@@ -1,0 +1,177 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>车机能力测试</title>
+<style>
+  :root{color-scheme:dark}
+  *{box-sizing:border-box;margin:0;padding:0}
+  body{background:#0b0f14;color:#e8eef4;font-family:-apple-system,"PingFang SC","Microsoft YaHei",sans-serif;padding:22px 26px 40px}
+  h1{font-size:30px;margin-bottom:6px}
+  .env{font-size:15px;color:#9fb2c3;word-break:break-all;line-height:1.5;margin-bottom:18px}
+  .grid{display:grid;grid-template-columns:1fr 1fr 1fr;gap:16px}
+  @media (max-width:900px){.grid{grid-template-columns:1fr}}
+  .card{background:#141c26;border:1px solid #263242;border-radius:16px;padding:18px}
+  .card h2{font-size:22px;margin-bottom:10px}
+  .status{font-size:17px;line-height:1.55;min-height:120px;white-space:pre-wrap;word-break:break-all}
+  .ok{color:#4ade80}.bad{color:#f87171}.warn{color:#fbbf24}
+  button{background:#1687ff;color:#fff;border:0;border-radius:12px;font-size:20px;padding:14px 18px;width:100%;cursor:pointer;touch-action:manipulation;margin-top:10px}
+  button:active{background:#0f6fd6}
+  button:disabled{background:#3a4756;color:#93a5b5}
+  .meter{height:16px;background:#0b0f14;border-radius:8px;overflow:hidden;margin-top:10px;border:1px solid #263242}
+  .meter>i{display:block;height:100%;width:0%;background:#4ade80;transition:width .08s}
+  audio{width:100%;margin-top:10px}
+  .hint{margin-top:18px;font-size:16px;color:#9fb2c3}
+</style>
+</head>
+<body>
+<h1>车机能力测试（三项）</h1>
+<div class="env" id="env">环境检测中…</div>
+<div class="grid">
+  <div class="card">
+    <h2>① 定位 GPS</h2>
+    <div class="status" id="geoStatus">未测试</div>
+    <button id="geoBtn">开始定位（测10秒）</button>
+  </div>
+  <div class="card">
+    <h2>② 麦克风录音</h2>
+    <div class="status" id="micStatus">未测试</div>
+    <div class="meter"><i id="micLevel"></i></div>
+    <button id="micBtn">开始录音（4秒）</button>
+    <audio id="micPlay" controls style="display:none"></audio>
+  </div>
+  <div class="card">
+    <h2>③ 语音合成 TTS</h2>
+    <div class="status" id="ttsStatus">未测试</div>
+    <button id="ttsBtn">播报一句话试试</button>
+  </div>
+</div>
+<div class="hint">三项都测完后，把屏幕截图发给 Muse 即可。②录音结束后点播放，能听到自己的声音就是录音+播放都通。</div>
+<script>
+(function(){
+  var env=document.getElementById('env');
+  env.textContent='安全上下文(HTTPS)：'+(window.isSecureContext?'是':'否')+
+    '｜geolocation：'+('geolocation' in navigator?'有':'无')+
+    '｜mediaDevices：'+(navigator.mediaDevices?'有':'无')+
+    '｜getUserMedia：'+(navigator.mediaDevices&&navigator.mediaDevices.getUserMedia?'有':'无')+
+    '｜MediaRecorder：'+(typeof MediaRecorder!=='undefined'?'有':'无')+
+    '｜speechSynthesis：'+('speechSynthesis' in window?'有':'无')+
+    '\nUA：'+navigator.userAgent;
+
+  // ---------- 1. Geolocation ----------
+  var geoStatus=document.getElementById('geoStatus'),geoBtn=document.getElementById('geoBtn');
+  geoBtn.addEventListener('click',function(){
+    if(!('geolocation' in navigator)){geoStatus.innerHTML='<span class="bad">❌ 浏览器没有定位接口</span>';return}
+    geoBtn.disabled=true;geoStatus.textContent='定位中…（10秒）';
+    var count=0,lastAcc=null,t0=Date.now(),watchId=null,done=false;
+    function finish(msg){if(done)return;done=true;if(watchId!==null)navigator.geolocation.clearWatch(watchId);geoBtn.disabled=false;geoStatus.innerHTML=msg}
+    function onPos(p){
+      count++;lastAcc=p.coords.accuracy;
+      var s='✅ 已收到 '+count+' 次定位\n纬度 '+p.coords.latitude.toFixed(6)+' 经度 '+p.coords.longitude.toFixed(6)+
+        '\n精度 ±'+Math.round(p.coords.accuracy)+' 米'+(p.coords.speed!=null?('\n速度 '+(p.coords.speed*3.6).toFixed(1)+' km/h'):'')+
+        '\n用时 '+((Date.now()-t0)/1000).toFixed(1)+' 秒';
+      geoStatus.innerHTML=s;
+      if(Date.now()-t0>=10000)finish(s+'\n<span class="'+(lastAcc<=60?'ok':'warn')+'">结论：'+(lastAcc<=60?'精度可用':'精度较差（>60米）')+'</span>');
+    }
+    function onErr(e){
+      var names={1:'PERMISSION_DENIED（权限被拒）',2:'POSITION_UNAVAILABLE（拿不到位置）',3:'TIMEOUT（超时）'};
+      finish('<span class="bad">❌ 定位失败：'+(names[e.code]||e.message)+'\n已收到 '+count+' 次</span>');
+    }
+    watchId=navigator.geolocation.watchPosition(onPos,onErr,{enableHighAccuracy:true,timeout:12000,maximumAge:0});
+    setTimeout(function(){if(!done){if(count>0){finish(geoStatus.innerHTML+'\n<span class="warn">（10秒到，共 '+count+' 次）</span>')}else{onErr({code:3})}}},13000);
+  });
+
+  // ---------- 2. Microphone ----------
+  var micStatus=document.getElementById('micStatus'),micBtn=document.getElementById('micBtn'),
+      micLevel=document.getElementById('micLevel'),micPlay=document.getElementById('micPlay');
+  function wavFallback(stream){
+    return new Promise(function(resolve,reject){
+      var AC=window.AudioContext||window.webkitAudioContext;
+      if(!AC)return reject(new Error('no AudioContext'));
+      var ctx=new AC(),src=ctx.createMediaStreamSource(stream),proc=ctx.createScriptProcessor(4096,1,1),
+          chunks=[],analyser=ctx.createAnalyser();analyser.fftSize=512;
+      var data=new Uint8Array(analyser.frequencyBinCount);
+      src.connect(analyser);analyser.connect(proc);proc.connect(ctx.destination);
+      proc.onaudioprocess=function(e){chunks.push(new Float32Array(e.inputBuffer.getChannelData(0)))};
+      var iv=setInterval(function(){analyser.getByteFrequencyData(data);var sum=0;for(var i=0;i<data.length;i++)sum+=data[i];micLevel.style.width=Math.min(100,sum/data.length*2.2)+'%'},90);
+      setTimeout(function(){
+        clearInterval(iv);micLevel.style.width='0%';
+        try{proc.disconnect();src.disconnect();ctx.close()}catch(e){}
+        var len=0;chunks.forEach(function(c){len+=c.length});
+        var buf=new Float32Array(len),off=0;chunks.forEach(function(c){buf.set(c,off);off+=c.length});
+        var rate=ctx.sampleRate||44100,out=new DataView(new ArrayBuffer(44+buf.length*2)),pos=44;
+        function ws(v,s){for(var i=0;i<s.length;i++)v.setUint8(pos++,s.charCodeAt(i))}
+        function w32(v,n){v.setUint32(pos,n,true);pos+=4}
+        function w16(v,n){v.setUint16(pos,n,true);pos+=2}
+        var dv=new DataView(out.buffer);
+        // build header manually
+        var ab=new ArrayBuffer(44+buf.length*2),v=new DataView(ab);pos=0;
+        ws(v,'RIFF');w32(v,36+buf.length*2);ws(v,'WAVE');ws(v,'fmt ');w32(v,16);w16(v,1);w16(v,1);
+        w32(v,rate);w32(v,rate*2);w16(v,2);w16(v,16);ws(v,'data');w32(v,buf.length*2);
+        for(var i=0;i<buf.length;i++){var s=Math.max(-1,Math.min(1,buf[i]));v.setInt16(pos,s<0?s*0x8000:s*0x7FFF,true);pos+=2}
+        resolve(new Blob([ab],{type:'audio/wav'}));
+      },4000);
+    });
+  }
+  micBtn.addEventListener('click',function(){
+    if(!navigator.mediaDevices||!navigator.mediaDevices.getUserMedia){
+      micStatus.innerHTML='<span class="bad">❌ 没有 getUserMedia 接口（录音无路）</span>';return}
+    micBtn.disabled=true;micPlay.style.display='none';micStatus.textContent='请求麦克风权限中…';
+    navigator.mediaDevices.getUserMedia({audio:true}).then(function(stream){
+      micStatus.innerHTML='<span class="warn">🎙 正在录音，请随便说几句话…（4秒）</span>';
+      var useMR=(typeof MediaRecorder!=='undefined');
+      var done=function(blob,how){
+        stream.getTracks().forEach(function(t){t.stop()});
+        micBtn.disabled=false;
+        if(!blob||blob.size<1000){micStatus.innerHTML='<span class="bad">❌ 录到的声音为空（'+how+'，'+(blob?blob.size:0)+' 字节）</span>';return}
+        micPlay.src=URL.createObjectURL(blob);micPlay.style.display='block';
+        micStatus.innerHTML='<span class="ok">✅ 录音成功（'+how+'）\n大小 '+(blob.size/1024).toFixed(1)+' KB，类型 '+(blob.type||'audio/wav')+'</span>\n点下方播放，听到自己的声音 = 录音和播放都通';
+      };
+      if(useMR){
+        var mime='';
+        ['audio/webm','audio/mp4','audio/ogg',''].forEach(function(m){if(!mime&&m&&MediaRecorder.isTypeSupported(m))mime=m});
+        try{
+          var rec=new MediaRecorder(stream,mime?{mimeType:mime}:undefined),parts=[];
+          rec.ondataavailable=function(e){if(e.data&&e.data.size)parts.push(e.data)};
+          rec.onstop=function(){done(new Blob(parts,{type:mime||'audio/webm'}),'MediaRecorder')};
+          var anCtx=new (window.AudioContext||window.webkitAudioContext)(),an=anCtx.createAnalyser(),ms=anCtx.createMediaStreamSource(stream);
+          ms.connect(an);an.fftSize=512;var d=new Uint8Array(an.frequencyBinCount);
+          var iv=setInterval(function(){an.getByteFrequencyData(d);var s=0;for(var i=0;i<d.length;i++)s+=d[i];micLevel.style.width=Math.min(100,s/d.length*2.2)+'%'},90);
+          rec.start(250);
+          setTimeout(function(){clearInterval(iv);micLevel.style.width='0%';try{anCtx.close()}catch(e){} if(rec.state!=='inactive')rec.stop();else done(null,'MediaRecorder')},4000);
+        }catch(e){ wavFallback(stream).then(function(b){done(b,'WAV回退')},function(err){stream.getTracks().forEach(function(t){t.stop()});micBtn.disabled=false;micStatus.innerHTML='<span class="bad">❌ 录音失败：'+err.name+' '+err.message+'</span>'}) }
+      }else{
+        wavFallback(stream).then(function(b){done(b,'WAV回退')},function(err){stream.getTracks().forEach(function(t){t.stop()});micBtn.disabled=false;micStatus.innerHTML='<span class="bad">❌ 录音失败：'+err.name+' '+err.message+'</span>'});
+      }
+    }).catch(function(err){
+      micBtn.disabled=false;
+      micStatus.innerHTML='<span class="bad">❌ 麦克风打不开：'+err.name+'\n'+err.message+'</span>';
+    });
+  });
+
+  // ---------- 3. Speech synthesis ----------
+  var ttsStatus=document.getElementById('ttsStatus'),ttsBtn=document.getElementById('ttsBtn');
+  function listVoices(tag){
+    if(!('speechSynthesis' in window)){ttsStatus.innerHTML='<span class="bad">❌ 没有 speechSynthesis 接口</span>';return null}
+    var vs=window.speechSynthesis.getVoices(),zh=vs.filter(function(v){return /zh|cmn|yue/i.test(v.lang||'')});
+    ttsStatus.innerHTML='声音总数 '+vs.length+'，中文声音 '+zh.length+(zh.length?('：'+zh.map(function(v){return v.name}).join('、')):'')+'\n（'+tag+'）';
+    return {total:vs.length,zh:zh.length};
+  }
+  if('speechSynthesis' in window){
+    listVoices('页面打开时');
+    window.speechSynthesis.onvoiceschanged=function(){listVoices('声音列表更新后')};
+  } else { listVoices('无接口') }
+  ttsBtn.addEventListener('click',function(){
+    if(!('speechSynthesis' in window))return;
+    var t0=Date.now(),u=new SpeechSynthesisUtterance('前方二百米右转，进入长安街。导航语音测试。');
+    u.lang='zh-CN';
+    u.onend=function(){ttsStatus.innerHTML+='\n<span class="ok">✅ 播报完成（'+((Date.now()-t0)/1000).toFixed(1)+'秒）——你听到声音了吗？没声音就是合成坏了</span>'};
+    u.onerror=function(e){ttsStatus.innerHTML+='\n<span class="bad">❌ 播报报错：'+e.error+'</span>'};
+    window.speechSynthesis.cancel();window.speechSynthesis.speak(u);
+    ttsStatus.innerHTML+='\n已发起播报…';
+  });
+})();
+</script>
+</body>
+</html>
