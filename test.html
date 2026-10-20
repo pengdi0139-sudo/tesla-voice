@@ -51,6 +51,11 @@
     <div class="status" id="dsStatus">未测试</div>
     <button id="dsBtn">向 DeepSeek 问声好</button>
   </div>
+  <div class="card">
+    <h2>⑤ 全屏</h2>
+    <div class="status" id="fsStatus">未测试</div>
+    <button id="fsBtn">试试全屏</button>
+  </div>
 </div>
 <div class="hint">三项都测完后，把屏幕截图发给 Muse 即可。②录音结束后点播放，能听到自己的声音就是录音+播放都通。</div>
 <script>
@@ -201,6 +206,31 @@
       dsBtn.disabled=false;
       dsStatus.innerHTML='<span class="bad">❌ DeepSeek 不通：'+e.name+' '+e.message+'</span>';
     });
+  });
+
+  // ---------- 5. Fullscreen ----------
+  var fsStatus=document.getElementById('fsStatus'),fsBtn=document.getElementById('fsBtn');
+  fsStatus.textContent='浏览器报告 fullscreenEnabled：'+(document.fullscreenEnabled===undefined?'未知':document.fullscreenEnabled)+'\n当前窗口：'+window.innerWidth+'×'+window.innerHeight+'，屏幕：'+screen.width+'×'+screen.height;
+  fsBtn.addEventListener('click',function(){
+    var el=document.documentElement;
+    var req=el.requestFullscreen||el.webkitRequestFullscreen;
+    if(!req){fsStatus.innerHTML='<span class="bad">❌ 没有全屏接口（requestFullscreen 不存在）</span>';return}
+    var p;
+    try{p=req.call(el)}catch(e){fsStatus.innerHTML='<span class="bad">❌ 全屏调用抛错：'+e.name+' '+e.message+'</span>';return}
+    var check=function(){
+      var on=!!(document.fullscreenElement||document.webkitFullscreenElement);
+      fsStatus.innerHTML=(on?'<span class="ok">✅ 进入全屏了</span>':'<span class="warn">⚠️ 调用没报错但没进全屏（被浏览器忽略）</span>')+
+        '\n窗口变为：'+window.innerWidth+'×'+window.innerHeight+'（屏幕 '+screen.width+'×'+screen.height+'）\n再点一次按钮可退出全屏测试';
+      fsBtn.textContent=on?'退出全屏':'再试一次全屏';
+      fsBtn.onclick=function(){
+        var ex=document.exitFullscreen||document.webkitExitFullscreen;
+        if(document.fullscreenElement&&ex)ex.call(document);
+        fsBtn.textContent='试试全屏';fsBtn.onclick=null;
+        fsStatus.innerHTML+='\n已退出/重置，可再次测试';
+      };
+    };
+    if(p&&p.then)p.then(function(){setTimeout(check,400)}).catch(function(e){fsStatus.innerHTML='<span class="bad">❌ 全屏被拒：'+e.name+' '+e.message+'</span>'});
+    else setTimeout(check,600);
   });
 })();
 </script>
